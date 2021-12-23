@@ -50,7 +50,7 @@ MAIN_DIR="$( readlink -f "$SIMPLE_SCRIPT_DIR/../" 2>/dev/null || greadlink -f "$
 echo "Main directory: $MAIN_DIR"
 mkdir -p "$MAIN_DIR"/tmp/
 
-version=3.10
+version=3.11-SNAPSHOT
 coordinates=org/jenkins-ci/update-center2/$version/update-center2-$version-bin.zip
 
 if [[ -f "$MAIN_DIR"/tmp/generator-$version.zip ]] ; then
@@ -74,31 +74,47 @@ function execute {
   # TODO once we have a new cert, no longer override the duration
 }
 
-execute --dynamic-tier-list-file tmp/tiers.json
-readarray -t WEEKLY_RELEASES < <( jq --raw-output '.weeklyCores[]' tmp/tiers.json ) || { echo "Failed to determine weekly tier list" >&2 ; exit 1 ; }
-readarray -t STABLE_RELEASES < <( jq --raw-output '.stableCores[]' tmp/tiers.json ) || { echo "Failed to determine stable tier list" >&2 ; exit 1 ; }
+#execute --dynamic-tier-list-file tmp/tiers.json
+#readarray -t WEEKLY_RELEASES < <( jq --raw-output '.weeklyCores[]' tmp/tiers.json ) || { echo "Failed to determine weekly tier list" >&2 ; exit 1 ; }
+#readarray -t STABLE_RELEASES < <( jq --raw-output '.stableCores[]' tmp/tiers.json ) || { echo "Failed to determine stable tier list" >&2 ; exit 1 ; }
 
 # Workaround for https://github.com/jenkinsci/docker/issues/954 -- still generate fixed tier update sites
-readarray -t RELEASES < <( curl --silent --fail 'https://repo.jenkins-ci.org/api/search/versions?g=org.jenkins-ci.main&a=jenkins-core&repos=releases&v=?.*.1' | jq --raw-output '.results[].version' | head -n 5 | $SORT --version-sort ) || { echo "Failed to retrieve list of recent LTS releases" >&2 ; exit 1 ; }
+readarray -t ALL_STABLE_RELEASES < <( curl --silent --fail 'https://repo.jenkins-ci.org/api/search/versions?g=org.jenkins-ci.main&a=jenkins-core&repos=releases&v=2.*.?' | jq --raw-output '.results[].version' | $SORT --version-sort ) || { echo "Failed to retrieve list of recent LTS releases" >&2 ; exit 1 ; }
+
+STABLE_RELEASES=(2.60.3 2.190.1)
+for version in "${ALL_STABLE_RELEASES[@]}" ; do
+  v="${version/%.?/}"
+
+  if [[ ${v/./} -lt 2277 ]] ; then # TODO Make 3.x safe
+    echo "Skipping generation of $version / stable-$version"
+    continue
+  fi
+  STABLE_RELEASES+=($version)
+done
 
 # prepare the www workspace for execution
 rm -rf "$WWW_ROOT_DIR"
 mkdir -p "$WWW_ROOT_DIR"
 
+WEEKLY_RELEASES=()
+
 # Generate htaccess file
 "$( dirname "$0" )"/generate-htaccess.sh "${WEEKLY_RELEASES[@]}" "${STABLE_RELEASES[@]}" > "$WWW_ROOT_DIR/.htaccess"
+
+# Generate nginx-lua file file
+"$( dirname "$0" )"/generate-nginx-lua.sh "${WEEKLY_RELEASES[@]}" "${STABLE_RELEASES[@]}" > "$WWW_ROOT_DIR/.nginx-lua.conf"
 
 # Reset arguments file
 echo "# one update site per line" > "$MAIN_DIR"/tmp/args.lst
 
 function generate {
-  echo "--key $SECRET/update-center.key --certificate $SECRET/update-center.cert --root-certificate $( dirname "$0" )/../resources/certificates/jenkins-update-center-root-ca-2.crt --index-template-url https://www.jenkins.io/templates/downloads/ $EXTRA_ARGS $*" >> "$MAIN_DIR"/tmp/args.lst
+  echo "--key $SECRET/update-center.key --certificate $SECRET/update-center.cert --certificate $SECRET/SAPNetCA_G2.crt --root-certificate $SECRET/SAP_Global_Root_CA.crt  $EXTRA_ARGS $*" >> "$MAIN_DIR"/tmp/args.lst
 }
 
 function sanity-check {
   dir="$1"
   file="$dir/update-center.json"
-  if [[ 1500000 -ge $( wc -c < "$file" ) ]] ; then
+  if [[ 15 -ge $( wc -c < "$file" ) ]] ; then
     echo "Sanity check: $file looks too small" >&2
     exit 1
   else
@@ -116,64 +132,49 @@ for version in "${WEEKLY_RELEASES[@]}" ; do
   # For mainline, advertising the latest core
   generate --limit-plugin-core-dependency "$version" --write-latest-core --latest-links-directory "$WWW_ROOT_DIR/dynamic-$version/latest" --www-dir "$WWW_ROOT_DIR/dynamic-$version"
 done
-
+#STABLE_RELEASES=("2.60.3", "2.303.3")
 for version in "${STABLE_RELEASES[@]}" ; do
+  v="${version/%.?/}"
+
+  #if [[ ${v/./} -lt 2303 ]] ; then # TODO Make 3.x safe
+    #echo "Skipping generation of $version / stable-$version"
+    #continue
+  #fi
+
   # For LTS, advertising the latest LTS core
   generate --limit-plugin-core-dependency "$version" --write-latest-core --latest-links-directory "$WWW_ROOT_DIR/dynamic-stable-$version/latest" --www-dir "$WWW_ROOT_DIR/dynamic-stable-$version" --only-stable-core
 done
 
-# Workaround for https://github.com/jenkinsci/docker/issues/954 -- still generate fixed tier update sites
-for ltsv in "${RELEASES[@]}" ; do
-  v="${ltsv/%.1/}"
-
-  if [[ ${v/./} -gt 2240 ]] ; then # TODO Make 3.x safe
-    echo "INFRA-2615: Skipping generation of $v / stable-$v"
-    continue
-  fi
-
-  # For mainline up to $v, advertising the latest core
-  generate --limit-plugin-core-dependency "$v.999" --write-latest-core --latest-links-directory "$WWW_ROOT_DIR/$v/latest" --www-dir "$WWW_ROOT_DIR/$v"
-
-  # For LTS, advertising the latest LTS core
-  generate --limit-plugin-core-dependency "$v.999" --write-latest-core --latest-links-directory "$WWW_ROOT_DIR/stable-$v/latest" --www-dir "$WWW_ROOT_DIR/stable-$v" --only-stable-core
-done
 
 # Experimental update center without version caps, including experimental releases.
 # This is not a part of the version-based redirection rules, admins need to manually configure it.
 # Generate this first, including --downloads-directory, as this includes all releases, experimental and otherwise.
-generate --www-dir "$WWW_ROOT_DIR/experimental" --generate-recent-releases --with-experimental --downloads-directory "$DOWNLOAD_ROOT_DIR" --latest-links-directory "$WWW_ROOT_DIR/experimental/latest"
+#generate --www-dir "$WWW_ROOT_DIR/experimental" --generate-recent-releases --with-experimental --downloads-directory "$DOWNLOAD_ROOT_DIR" --latest-links-directory "$WWW_ROOT_DIR/experimental/latest"
 
 # Current update site without version caps, excluding experimental releases.
 # This generates -download after the experimental update site above to change the 'latest' symlinks to the latest released version.
 # This also generates --download-links-directory to only visibly show real releases on index.html pages.
 generate --generate-release-history --generate-recent-releases --generate-plugin-versions --generate-plugin-documentation-urls \
     --write-latest-core --write-plugin-count \
-    --www-dir "$WWW_ROOT_DIR/current" --download-links-directory "$WWW_ROOT_DIR/download" --downloads-directory "$DOWNLOAD_ROOT_DIR" --latest-links-directory "$WWW_ROOT_DIR/current/latest"
+    --www-dir "$WWW_ROOT_DIR/current" --download-links-directory "$WWW_ROOT_DIR/download" --downloads-directory "$DOWNLOAD_ROOT_DIR" --latest-links-directory "$WWW_ROOT_DIR/current/latest" --limit-core-release 2.277.1 --only-stable-core
 
 # Actually run the update center build.
 # The fastjson library cannot handle a file.encoding of US-ASCII even when manually specifying the encoding at every opportunity, so set a sane default here.
 execute --resources-dir "$MAIN_DIR"/resources --arguments-file "$MAIN_DIR"/tmp/args.lst
 
-# Generate symlinks to global /updates directory (created by crawler)
-for ltsv in "${RELEASES[@]}" ; do
-  v="${ltsv/%.1/}"
 
-  if [[ ${v/./} -gt 2240 ]] ; then # TODO Make 3.x safe
-    continue
-  fi
-
-  sanity-check "$WWW_ROOT_DIR/$v"
-  sanity-check "$WWW_ROOT_DIR/stable-$v"
-  ln -sf ../updates "$WWW_ROOT_DIR/$v/updates"
-  ln -sf ../updates "$WWW_ROOT_DIR/stable-$v/updates"
-done
-
-for version in "${WEEKLY_RELEASES[@]}" ; do
-  sanity-check "$WWW_ROOT_DIR/dynamic-$version"
-  ln -sf ../updates "$WWW_ROOT_DIR/dynamic-$version/updates"
-done
+#for version in "${WEEKLY_RELEASES[@]}" ; do
+#  sanity-check "$WWW_ROOT_DIR/dynamic-$version"
+#  ln -sf ../updates "$WWW_ROOT_DIR/dynamic-$version/updates"
+#done
 
 for version in "${STABLE_RELEASES[@]}" ; do
+  v="${version/%.?/}"
+
+  if [[ ${v/./} -lt 2300 ]] ; then # TODO Make 3.x safe
+    #echo "Skipping generation of $v / stable-$v"
+    continue
+  fi
   sanity-check "$WWW_ROOT_DIR/dynamic-stable-$version"
   ln -sf ../updates "$WWW_ROOT_DIR/dynamic-stable-$version/updates"
 
@@ -181,9 +182,9 @@ for version in "${STABLE_RELEASES[@]}" ; do
   lastLTS=dynamic-stable-$version
 done
 
-sanity-check "$WWW_ROOT_DIR/experimental"
+#sanity-check "$WWW_ROOT_DIR/experimental"
 sanity-check "$WWW_ROOT_DIR/current"
-ln -sf ../updates "$WWW_ROOT_DIR/experimental/updates"
+#ln -sf ../updates "$WWW_ROOT_DIR/experimental/updates"
 ln -sf ../updates "$WWW_ROOT_DIR/current/updates"
 
 
@@ -198,4 +199,4 @@ popd
 # copy other static resource files
 echo '{}' > "$WWW_ROOT_DIR/uctest.json"
 wget -q --convert-links -O "$WWW_ROOT_DIR/index.html" --convert-links https://www.jenkins.io/templates/updates/index.html
-cp -av "tmp/tiers.json" "$WWW_ROOT_DIR/tiers.json"
+#cp -av "tmp/tiers.json" "$WWW_ROOT_DIR/tiers.json"

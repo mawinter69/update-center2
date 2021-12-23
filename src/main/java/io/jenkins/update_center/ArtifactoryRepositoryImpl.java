@@ -1,6 +1,40 @@
 package io.jenkins.update_center;
 
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Collection;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import java.util.jar.Manifest;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import java.util.stream.Collectors;
+
+import org.apache.commons.codec.DecoderException;
+import org.apache.commons.codec.binary.Base64;
+import org.apache.commons.codec.binary.Hex;
+import org.apache.commons.codec.digest.DigestUtils;
+import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.IOUtils;
+import org.apache.commons.io.output.TeeOutputStream;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.tools.ant.filters.StringInputStream;
+
 import com.alibaba.fastjson.JSON;
+
 import io.jenkins.update_center.util.Environment;
 import io.jenkins.update_center.util.HttpHelper;
 import okhttp3.Credentials;
@@ -10,46 +44,27 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
-import org.apache.commons.codec.DecoderException;
-import org.apache.commons.codec.binary.Base64;
-import org.apache.commons.codec.binary.Hex;
-import org.apache.commons.io.FileUtils;
-import org.apache.commons.io.IOUtils;
-import org.apache.commons.io.output.TeeOutputStream;
-import org.apache.commons.lang3.StringUtils;
-import org.apache.tools.ant.filters.StringInputStream;
-
-import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
-import java.util.Collection;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-import java.util.jar.Manifest;
-import java.util.logging.Level;
-import java.util.logging.Logger;
-import java.util.stream.Collectors;
 
 public class ArtifactoryRepositoryImpl extends BaseMavenRepository {
     private static final Logger LOGGER = Logger.getLogger(ArtifactoryRepositoryImpl.class.getName());
 
-    private static final String ARTIFACTORY_URL = "https://repo.jenkins-ci.org/";
-    private static final String ARTIFACTORY_API_URL = "https://repo.jenkins-ci.org/api/";
-    private static final String ARTIFACTORY_AQL_URL = ARTIFACTORY_API_URL + "search/aql";
-    private static final String ARTIFACTORY_MANIFEST_URL = ARTIFACTORY_URL + "%s/%s!/META-INF/MANIFEST.MF";
-    private static final String ARTIFACTORY_ZIP_ENTRY_URL = ARTIFACTORY_URL + "%s/%s!%s";
-    private static final String ARTIFACTORY_FILE_URL = ARTIFACTORY_URL + "%s/%s";
+    private static final String JENKINS_ARTIFACTORY_URL = "https://repo.jenkins-ci.org/";
+    private static final String JENKINS_ARTIFACTORY_API_URL = JENKINS_ARTIFACTORY_URL + "api/";
+    private static final String JENKINS_ARTIFACTORY_AQL_URL = JENKINS_ARTIFACTORY_API_URL + "search/aql";
+    private static String SECONDARY_ARTIFACTORY_URL = Environment.getString("SECONDARY_ARTIFACTORY_URL");
+    private static final String ARTIFACTORY_URL = SECONDARY_ARTIFACTORY_URL != null ? SECONDARY_ARTIFACTORY_URL : JENKINS_ARTIFACTORY_URL;
+    private static String SECONDARY_ARTIFACTORY_API_URL = ARTIFACTORY_URL+ "api/";
+    private static String SECONDARY_ARTIFACTORY_AQL_URL = SECONDARY_ARTIFACTORY_API_URL + "search/aql";
+    private static String ARTIFACTORY_MANIFEST_URL = ARTIFACTORY_URL + "%s/%s!/META-INF/MANIFEST.MF";
+    private static String ARTIFACTORY_ZIP_ENTRY_URL = ARTIFACTORY_URL + "%s/%s!%s";
+    private static String ARTIFACTORY_FILE_URL = ARTIFACTORY_URL + "%s/%s";
+    private static String ARTIFACTORY_REPO = Environment.getString("ARTIFACTORY_REPO", "releases");
+    
+    private static String SECONDARY_ARTIFACTORY_USERNAME = Environment.getString("SECONDARY_ARTIFACTORY_USERNAME");
+    private static String SECONDARY_ARTIFACTORY_PASSWORD = Environment.getString("SECONDARY_ARTIFACTORY_PASSWORD");
 
-    private static final String AQL_QUERY = "items.find({\"repo\":{\"$eq\":\"releases\"},\"$or\":[{\"name\":{\"$match\":\"*.hpi\"}},{\"name\":{\"$match\":\"*.jpi\"}},{\"name\":{\"$match\":\"*.war\"}}]}).include(\"repo\", \"path\", \"name\", \"modified\", \"created\", \"sha256\", \"actual_sha1\", \"size\")";
+    private static final String JENKINS_AQL_QUERY = "items.find({\"repo\":{\"$eq\":\"releases\"},"
+          + "\"$or\":[{\"name\":{\"$match\":\"*.hpi\"}},{\"name\":{\"$match\":\"*.jpi\"}},{\"name\":{\"$match\":\"*.war\"}}]}).include(\"repo\", \"path\", \"name\", \"modified\", \"created\", \"sha256\", \"actual_sha1\", \"size\")";
 
     private final String username;
     private final String password;
@@ -144,21 +159,60 @@ public class ArtifactoryRepositoryImpl extends BaseMavenRepository {
 
     private static final int CACHE_ENTRY_MAX_LENGTH = 1024 * 64;
 
+    private OkHttpClient client;
+
     private void initialize() throws IOException {
         if (initialized) {
             throw new IllegalStateException("re-initialized");
         }
         LOGGER.log(Level.INFO, "Initializing " + this.getClass().getName());
+        Path aql = Paths.get(Main.resourcesDir.getAbsolutePath(), "aql");
+        String secondaryAqlQuery = null;
+        if (aql.toFile().isFile()) {
+            try {
+                secondaryAqlQuery = new String(Files.readAllBytes(aql), StandardCharsets.UTF_8);
+            } catch (IOException ioe) {
+                LOGGER.log(Level.WARNING, "Failed to read AQL search from file " + aql.toString() + ". Falling back to default.");
+            }
+        }
 
-        OkHttpClient client = new OkHttpClient.Builder().build();
-        Request request = new Request.Builder().url(ARTIFACTORY_AQL_URL).addHeader("Authorization", Credentials.basic(username, password)).post(RequestBody.create(AQL_QUERY, MediaType.parse("text/plain; charset=utf-8"))).build();
+        OkHttpClient client = getClient();
+
+        Request request = new Request.Builder().url(JENKINS_ARTIFACTORY_AQL_URL)
+            .addHeader("Authorization", Credentials.basic(username, password))
+            .post(RequestBody.create(JENKINS_AQL_QUERY, MediaType.parse("text/plain; charset=utf-8")))
+            .build();
+
         try (final ResponseBody body = HttpHelper.body(client.newCall(request).execute())) {
             final MediaType mediaType = body.contentType();
+            //System.out.println(body.string());
             JsonResponse json = JSON.parseObject(body.byteStream(), mediaType == null ? StandardCharsets.UTF_8 : mediaType.charset(), JsonResponse.class);
             json.results.forEach(it -> this.files.put("/" + it.path + "/" + it.name, it));
         }
-        this.plugins = this.files.values().stream().filter(it -> it.name.endsWith(".hpi") || it.name.endsWith(".jpi")).map(ArtifactoryRepositoryImpl::toGav).filter(Objects::nonNull).collect(Collectors.toSet());
-        this.wars = this.files.values().stream().filter(it -> it.name.endsWith(".war")).map(ArtifactoryRepositoryImpl::toGav).collect(Collectors.toSet());
+
+        if (SECONDARY_ARTIFACTORY_URL != null 
+                && SECONDARY_ARTIFACTORY_PASSWORD != null 
+                && SECONDARY_ARTIFACTORY_USERNAME != null
+                && secondaryAqlQuery != null) {
+
+            LOGGER.log(Level.INFO, "Fetching data from secondory repo " + SECONDARY_ARTIFACTORY_URL);
+            LOGGER.log(Level.INFO, "AQL url " + SECONDARY_ARTIFACTORY_AQL_URL);
+            LOGGER.log(Level.INFO, "AQL query " + SECONDARY_ARTIFACTORY_AQL_URL);
+            request = new Request.Builder().url(SECONDARY_ARTIFACTORY_AQL_URL)
+                .addHeader("Authorization", Credentials.basic(SECONDARY_ARTIFACTORY_USERNAME, SECONDARY_ARTIFACTORY_PASSWORD))
+                .post(RequestBody.create(secondaryAqlQuery, MediaType.parse("text/plain; charset=utf-8")))
+                .build();
+    
+            try (final ResponseBody body = HttpHelper.body(client.newCall(request).execute())) {
+                final MediaType mediaType = body.contentType();
+                //System.out.println(body.string());
+                JsonResponse json = JSON.parseObject(body.byteStream(), mediaType == null ? StandardCharsets.UTF_8 : mediaType.charset(), JsonResponse.class);
+                json.results.forEach(it -> this.files.put("/" + it.path + "/" + it.name, it));
+            }
+    
+        }
+        this.plugins = this.files.values().parallelStream().filter(it -> it.name.endsWith(".hpi") || it.name.endsWith(".jpi")).map(ArtifactoryRepositoryImpl::toGav).filter(Objects::nonNull).collect(Collectors.toSet());
+        this.wars = this.files.values().parallelStream().filter(it -> it.name.endsWith(".war")).map(ArtifactoryRepositoryImpl::toGav).collect(Collectors.toSet());
         LOGGER.log(Level.INFO, "Initialized " + this.getClass().getName());
     }
 
@@ -209,7 +263,7 @@ public class ArtifactoryRepositoryImpl extends BaseMavenRepository {
 
     @Override
     public Manifest getManifest(MavenArtifact artifact) throws IOException {
-        try (InputStream is = getFileContent(String.format(ARTIFACTORY_MANIFEST_URL, "releases", getUri(artifact.artifact)))) {
+        try (InputStream is = getFileContent(String.format(ARTIFACTORY_MANIFEST_URL, ARTIFACTORY_REPO, getUri(artifact.artifact)))) {
             return new Manifest(is);
         }
     }
@@ -227,8 +281,8 @@ public class ArtifactoryRepositoryImpl extends BaseMavenRepository {
     }
 
     private File getFile(final String url) throws IOException {
-        String urlBase64 = Base64.encodeBase64String(new URL(url).getPath().getBytes(StandardCharsets.UTF_8));
-        File cacheFile = new File(cacheDirectory, urlBase64);
+        String urlSha256 = DigestUtils.sha256Hex(url);
+        File cacheFile = new File(cacheDirectory, urlSha256);
 
         if (!cacheFile.exists()) {
             // High log level, but during regular operation this will indicate when an artifact is newly picked up, so useful to know.
@@ -239,8 +293,7 @@ public class ArtifactoryRepositoryImpl extends BaseMavenRepository {
                 throw new IllegalStateException("Failed to create non-existing directory " + parentFile);
             }
             try {
-                OkHttpClient.Builder builder = new OkHttpClient.Builder();
-                OkHttpClient client = builder.build();
+                OkHttpClient client = getClient();
                 Request request = new Request.Builder().url(url).get().build();
                 final Response response = client.newCall(request).execute();
                 if (response.isSuccessful()) {
@@ -278,9 +331,17 @@ public class ArtifactoryRepositoryImpl extends BaseMavenRepository {
         return cacheFile;
     }
 
+    private OkHttpClient getClient() {
+        if (client == null) {
+            client = new OkHttpClient.Builder().readTimeout(5, TimeUnit.MINUTES).connectTimeout(2, TimeUnit.MINUTES).build();
+        }
+
+        return client;
+    }
+
     @Override
     public InputStream getZipFileEntry(MavenArtifact artifact, String path) throws IOException {
-        return getFileContent(String.format(ARTIFACTORY_ZIP_ENTRY_URL, "releases", getUri(artifact.artifact), StringUtils.prependIfMissing(path, "/")));
+        return getFileContent(String.format(ARTIFACTORY_ZIP_ENTRY_URL, ARTIFACTORY_REPO, getUri(artifact.artifact), StringUtils.prependIfMissing(path, "/")));
     }
 
     @Override
@@ -291,7 +352,7 @@ public class ArtifactoryRepositoryImpl extends BaseMavenRepository {
         if (localFile.exists()) {
             return localFile;
         }
-        return getFile(String.format(ARTIFACTORY_FILE_URL, "releases", uri));
+        return getFile(String.format(ARTIFACTORY_FILE_URL, ARTIFACTORY_REPO, uri));
     }
 
     private static final File LOCAL_REPO = new File(new File(System.getProperty("user.home")), ".m2/repository");

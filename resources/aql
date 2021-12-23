@@ -1,0 +1,3 @@
+items.find({"repo":{"$eq":"build-milestones"},
+          "path":{"$match":"com/sap/*"},
+          "$or":[{"name":{"$match":"*.hpi"}},{"name":{"$match":"*.jpi"}}]}).include("repo", "path", "name", "modified", "created", "sha256", "actual_sha1", "size")

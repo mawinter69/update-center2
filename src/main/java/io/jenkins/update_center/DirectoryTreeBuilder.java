@@ -69,7 +69,7 @@ public class DirectoryTreeBuilder {
                 }
 
                 if (wwwDownload != null) {
-                    String permalink = String.format("/latest/%s.hpi", plugin.getArtifactId());
+                    String permalink = String.format("/download/plugins/" + plugin.getArtifactId() + "/latest/%s.hpi", plugin.getArtifactId());
                     buildIndex(new File(wwwDownload, "plugins/" + plugin.getArtifactId()),
                             plugin.getLatest().getName(), plugin.getArtifactId(),
                             artifacts.values(), permalink, indexTemplateProvider);

@@ -553,7 +553,7 @@ public class HPI extends MavenArtifact {
 
                     String checkedScm = scm;
                     // Check whether the fallback repo actually exists, if not, don't publish the repo name
-                    scm = requireGitHubRepoExistence(scm);
+                    scm = null; //requireGitHubRepoExistence(scm);
                     if (scm == null) {
                         LOGGER.log(Level.FINE, "Repository does not actually exist: " + checkedScm);
                     }
@@ -621,7 +621,7 @@ public class HPI extends MavenArtifact {
         return this.labels;
     }
 
-    private String defaultBranch;
+    private String defaultBranch = "master";
 
     public String getDefaultBranch() throws IOException { // TODO this would be better in a different class, doesn't fit HPI type
         if (defaultBranch == null) {

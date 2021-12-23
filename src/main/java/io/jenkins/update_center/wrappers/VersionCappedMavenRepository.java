@@ -43,7 +43,7 @@ public class VersionCappedMavenRepository extends MavenRepositoryWrapper {
         if (capCore == null) {
             return allWars;
         }
-        return new TreeMap<>(allWars.tailMap(capCore,true));
+        return new TreeMap<>(allWars.headMap(capCore,true));
     }
 
     @Override
