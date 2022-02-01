@@ -6,6 +6,7 @@ import org.kohsuke.args4j.Option;
 
 import javax.annotation.CheckForNull;
 import java.io.File;
+import java.nio.file.Files;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -157,22 +158,14 @@ public class DirectoryTreeBuilder {
             throw new IOException("Failed to create " + parentFile);
         }
 
-        ProcessBuilder pb = new ProcessBuilder();
+        //ProcessBuilder pb = new ProcessBuilder();
         if (System.getProperty("os.name").toLowerCase(Locale.US).contains("windows")) {
             return;
         }
-        pb.command("ln", "-f", src.getAbsolutePath(), dst.getAbsolutePath());
-        Process p = pb.start();
-        try {
-            if (p.waitFor() != 0) {
-                throw new IOException("'ln -f " + src.getAbsolutePath() + " " + dst.getAbsolutePath() +
-                        "' failed with code " + p.exitValue() + "\nError: " + IOUtils.toString(p.getErrorStream()) + "\nOutput: " + IOUtils.toString(p.getInputStream()));
-            } else {
-                LOGGER.log(Level.INFO, "Created new download file " + dst + " from " + src);
-            }
-        } catch (InterruptedException ex) {
-            LOGGER.log(Level.WARNING, "Interrupted creating " + dst + " from " + src, ex);
-        }
+        //pb.command("ln", "-f", src.getAbsolutePath(), dst.getAbsolutePath());
+        //Process p = pb.start();
+        Files.createLink(dst.toPath(), src.toPath());
+        LOGGER.log(Level.INFO, "Created new download file " + dst + " from " + src);
 
     }
 
