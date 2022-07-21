@@ -1,0 +1,2 @@
+items.find({"repo":{"$eq":"releases"},
+          "$or":[{"name":{"$match":"*.hpi"}},{"name":{"$match":"*.jpi"}},{"name":{"$match":"*.war"}}]}).include("repo", "path", "name", "modified", "created", "sha256", "actual_sha1", "size")

@@ -82,11 +82,11 @@ WEEKLY_RELEASES=()
 # Workaround for https://github.com/jenkinsci/docker/issues/954 -- still generate fixed tier update sites
 readarray -t ALL_STABLE_RELEASES < <( curl --silent --fail 'https://repo.jenkins-ci.org/api/search/versions?g=org.jenkins-ci.main&a=jenkins-core&repos=releases&v=2.*.?' | jq --raw-output '.results[].version' | $SORT --version-sort ) || { echo "Failed to retrieve list of recent LTS releases" >&2 ; exit 1 ; }
 
-STABLE_RELEASES=(2.60.3 2.190.1)
+STABLE_RELEASES=(2.60.3)
 for version in "${ALL_STABLE_RELEASES[@]}" ; do
   v="${version/%.?/}"
 
-  if [[ ${v/./} -lt 2263 ]] ; then # TODO Make 3.x safe
+  if [[ ${v/./} -lt 2319 ]] ; then # TODO Make 3.x safe
     echo "Skipping generation of $version / stable-$version"
     continue
   fi

@@ -197,7 +197,7 @@ public class ArtifactoryRepositoryImpl extends BaseMavenRepository {
 
             LOGGER.log(Level.INFO, "Fetching data from secondory repo " + SECONDARY_ARTIFACTORY_URL);
             LOGGER.log(Level.INFO, "AQL url " + SECONDARY_ARTIFACTORY_AQL_URL);
-            LOGGER.log(Level.INFO, "AQL query " + SECONDARY_ARTIFACTORY_AQL_URL);
+            LOGGER.log(Level.INFO, "AQL query " + secondaryAqlQuery);
             request = new Request.Builder().url(SECONDARY_ARTIFACTORY_AQL_URL)
                 .addHeader("Authorization", Credentials.basic(SECONDARY_ARTIFACTORY_USERNAME, SECONDARY_ARTIFACTORY_PASSWORD))
                 .post(RequestBody.create(secondaryAqlQuery, MediaType.parse("text/plain; charset=utf-8")))
