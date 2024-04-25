@@ -62,6 +62,7 @@ public class UpdateCenterRoot extends WithSignature {
         // load deprecations
         deprecations = new TreeMap<>(Deprecations.getDeprecatedPlugins().collect(Collectors.toMap(Functions.identity(), UpdateCenterRoot::deprecationForPlugin)));
 
+        LOGGER.log(Level.INFO, "Creating PluginUpdateCenterEntry for plugins");
         repo.listJenkinsPlugins().parallelStream().forEach( plugin -> {
             try {
                 PluginUpdateCenterEntry entry = new PluginUpdateCenterEntry(plugin);

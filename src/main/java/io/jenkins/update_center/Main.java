@@ -255,6 +255,7 @@ public class Main {
 
         if (!skipUpdateCenter) {
             UpdateCenterRoot updateCenterRoot = new UpdateCenterRoot(id, connectionCheckUrl, repo, new File(Main.resourcesDir, WARNINGS_JSON_FILENAME));
+            LOGGER.log(Level.INFO, "Preloading excerpt");
             updateCenterRoot.plugins.values().parallelStream().forEach( e -> {
                 try {
                     e.getExcerpt();
@@ -262,6 +263,7 @@ public class Main {
                     LOGGER.log(Level.WARNING, ex, () -> "Failed to get excert for " + e.artifactId );
                 }
             });
+            LOGGER.log(Level.INFO, "encodeWithSignature");
             final String signedUpdateCenterJson = new UpdateCenterRoot(id, connectionCheckUrl, repo, new File(Main.resourcesDir, WARNINGS_JSON_FILENAME)).encodeWithSignature(signer, prettyPrint);
             writeToFile(updateCenterPostCallJson(signedUpdateCenterJson), new File(www, UPDATE_CENTER_JSON_FILENAME));
             writeToFile(signedUpdateCenterJson, new File(www, UPDATE_CENTER_ACTUAL_JSON_FILENAME));
@@ -269,25 +271,31 @@ public class Main {
         }
 
         if (generatePluginDocumentationUrls) {
+            LOGGER.log(Level.INFO, "generatePluginDocumentationUrls");
             new PluginDocumentationUrlsRoot(repo).write(new File(www, PLUGIN_DOCUMENTATION_URLS_JSON_FILENAME), prettyPrint);
         }
 
         if (generatePluginVersions) {
+            LOGGER.log(Level.INFO, "generatePluginVersions");
             new PluginVersionsRoot("1", repo).writeWithSignature(new File(www, PLUGIN_VERSIONS_JSON_FILENAME), signer, prettyPrint);
         }
 
         if (generateReleaseHistory) {
+            LOGGER.log(Level.INFO, "generateReleaseHistory");
             new ReleaseHistoryRoot(repo).write(new File(www, RELEASE_HISTORY_JSON_FILENAME), prettyPrint);
         }
 
         if (generateRecentReleases) {
+            LOGGER.log(Level.INFO, "generateRecentReleases");
             new RecentReleasesRoot(repo).write(new File(www, RECENT_RELEASES_JSON_FILENAME), prettyPrint);
         }
 
         if (generatePlatformPlugins) {
+            LOGGER.log(Level.INFO, "generatePlatformPlugins");
             new PlatformPluginsRoot(new File(Main.resourcesDir, PLATFORM_PLUGINS_RESOURCE_FILENAME)).writeWithSignature(new File(www, PLATFORM_PLUGINS_JSON_FILENAME), signer, prettyPrint);
         }
 
+        LOGGER.log(Level.INFO, "building repo");
         directoryTreeBuilder.build(repo);
     }
 
