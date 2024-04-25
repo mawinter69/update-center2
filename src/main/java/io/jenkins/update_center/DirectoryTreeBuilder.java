@@ -64,9 +64,13 @@ public class DirectoryTreeBuilder {
                 final TreeMap<VersionNumber, HPI> artifacts = plugin.getArtifacts();
 
                 if (download != null) {
-                    for (HPI v : artifacts.values()) {
-                        stage(v, new File(download, "plugins/" + plugin.getArtifactId() + "/" + v.version + "/" + plugin.getArtifactId() + ".hpi"));
-                    }
+                    artifacts.values().parallelStream().forEach(v -> {
+                        try {
+                            stage(v, new File(download, "plugins/" + plugin.getArtifactId() + "/" + v.version + "/" + plugin.getArtifactId() + ".hpi"));
+                        } catch (IOException e) {
+                            throw new RuntimeException(e);
+                        }
+                    });
                     if (!artifacts.isEmpty()) {
                         createLatestSymlink(plugin);
                     }
