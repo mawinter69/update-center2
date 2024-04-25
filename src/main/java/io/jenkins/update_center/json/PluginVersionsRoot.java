@@ -5,6 +5,7 @@ import io.jenkins.update_center.MavenRepository;
 import io.jenkins.update_center.Plugin;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
@@ -24,7 +25,8 @@ public class PluginVersionsRoot extends WithSignature {
     @JSONField
     public Map<String, PluginVersions> getPlugins() throws IOException {
         if (plugins == null) {
-            plugins = new TreeMap<>(repository.listJenkinsPlugins().stream().collect(Collectors.toMap(Plugin::getArtifactId, plugin -> new PluginVersions(plugin.getArtifacts()))));
+            plugins = Collections.synchronizedMap(new TreeMap<>());
+            plugins.putAll(repository.listJenkinsPlugins().parallelStream().collect(Collectors.toMap(Plugin::getArtifactId, plugin -> new PluginVersions(plugin.getArtifacts()))));
         }
         plugins.entrySet().removeIf(e -> e.getValue().releases.isEmpty());
         return plugins;
