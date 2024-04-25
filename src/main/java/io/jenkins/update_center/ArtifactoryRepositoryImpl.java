@@ -4,7 +4,12 @@ import com.alibaba.fastjson.JSON;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import io.jenkins.update_center.util.Environment;
 import io.jenkins.update_center.util.HttpHelper;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Iterator;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 import okhttp3.Credentials;
 import okhttp3.MediaType;
@@ -46,16 +51,25 @@ import java.util.stream.Collectors;
 public class ArtifactoryRepositoryImpl extends BaseMavenRepository {
     private static final Logger LOGGER = Logger.getLogger(ArtifactoryRepositoryImpl.class.getName());
 
-    private static final String ARTIFACTORY_URL = Environment.getString("ARTIFACTORY_URL", "https://repo.jenkins-ci.org/");
-    private static final String ARTIFACTORY_API_URL = Environment.getString("ARTIFACTORY_API_URL", "https://repo.jenkins-ci.org/api/");
-    private static final String ARTIFACTORY_REPOSITORY = Environment.getString("ARTIFACTORY_REPOSITORY", "releases");
+    private static final String JENKINS_ARTIFACTORY_URL = Environment.getString("ARTIFACTORY_URL", "https://repo.jenkins-ci.org/");
+    private static final String JENKINS_ARTIFACTORY_API_URL = Environment.getString("ARTIFACTORY_API_URL", "https://repo.jenkins-ci.org/api/");
+    private static final String JENKINS_ARTIFACTORY_REPOSITORY = Environment.getString("ARTIFACTORY_REPOSITORY", "releases");
+    private static final String ARTIFACTORY_REPOSITORY = Environment.getString("ARTIFACTORY_REPO", "releases");
+    private static final String JENKINS_ARTIFACTORY_AQL_URL = JENKINS_ARTIFACTORY_API_URL + "search/aql";
 
-    private static final String ARTIFACTORY_AQL_URL = ARTIFACTORY_API_URL + "search/aql";
+    private static final String SECONDARY_ARTIFACTORY_URL = Environment.getString("SECONDARY_ARTIFACTORY_URL");
+    private static final String ARTIFACTORY_URL = SECONDARY_ARTIFACTORY_URL != null ? SECONDARY_ARTIFACTORY_URL : JENKINS_ARTIFACTORY_URL;
+
     private static final String ARTIFACTORY_MANIFEST_URL = ARTIFACTORY_URL + "%s/%s!/META-INF/MANIFEST.MF";
     private static final String ARTIFACTORY_ZIP_ENTRY_URL = ARTIFACTORY_URL + "%s/%s!%s";
     private static final String ARTIFACTORY_FILE_URL = ARTIFACTORY_URL + "%s/%s";
 
-    private static final String AQL_QUERY = "items.find({\"repo\":{\"$eq\":\"" + ARTIFACTORY_REPOSITORY + "\"},\"$or\":[{\"name\":{\"$match\":\"*.hpi\"}},{\"name\":{\"$match\":\"*.jpi\"}},{\"name\":{\"$match\":\"*.war\"}},{\"name\":{\"$match\":\"*.pom\"}}]}).include(\"repo\", \"path\", \"name\", \"modified\", \"created\", \"sha256\", \"actual_sha1\", \"size\")";
+    private static final String SECONDARY_ARTIFACTORY_API_URL = ARTIFACTORY_URL+ "api/";
+    private static final String SECONDARY_ARTIFACTORY_AQL_URL = SECONDARY_ARTIFACTORY_API_URL + "search/aql";
+    private static final String SECONDARY_ARTIFACTORY_USERNAME = Environment.getString("SECONDARY_ARTIFACTORY_USERNAME");
+    private static final String SECONDARY_ARTIFACTORY_PASSWORD = Environment.getString("SECONDARY_ARTIFACTORY_PASSWORD");
+
+    private static final String AQL_QUERY = "items.find({\"repo\":{\"$eq\":\"" + JENKINS_ARTIFACTORY_REPOSITORY + "\"},\"$or\":[{\"name\":{\"$match\":\"*.hpi\"}},{\"name\":{\"$match\":\"*.jpi\"}},{\"name\":{\"$match\":\"*.war\"}},{\"name\":{\"$match\":\"*.pom\"}}]}).include(\"repo\", \"path\", \"name\", \"modified\", \"created\", \"sha256\", \"actual_sha1\", \"size\")";
 
     private final String username;
     private final String password;
@@ -156,23 +170,70 @@ public class ArtifactoryRepositoryImpl extends BaseMavenRepository {
 
     private static final int CACHE_ENTRY_MAX_LENGTH = 1024 * 64;
 
+    private OkHttpClient client;
+
+    private OkHttpClient getClient() {
+        if (client == null) {
+            client = new OkHttpClient.Builder().readTimeout(5, TimeUnit.MINUTES).connectTimeout(2, TimeUnit.MINUTES).build();
+        }
+
+        return client;
+    }
+
+    private Request.Builder getBuilder() {
+        return new Request.Builder().addHeader("Authorization", Credentials.basic(username, password));
+    }
+
     private void initialize() throws IOException {
         if (initialized) {
             throw new IllegalStateException("re-initialized");
         }
         LOGGER.log(Level.INFO, "Initializing " + this.getClass().getName());
 
-        OkHttpClient client = new OkHttpClient.Builder().build();
-        Request request = new Request.Builder().url(ARTIFACTORY_AQL_URL).addHeader("Authorization", Credentials.basic(username, password)).post(RequestBody.create(AQL_QUERY, MediaType.parse("text/plain; charset=utf-8"))).build();
+        OkHttpClient client = getClient();
+
+        Request request = getBuilder().url(JENKINS_ARTIFACTORY_AQL_URL).post(RequestBody.create(AQL_QUERY, MediaType.parse("text/plain; charset=utf-8"))).build();
         try (final ResponseBody body = HttpHelper.body(client.newCall(request).execute())) {
             final MediaType mediaType = body.contentType();
             JsonResponse json = JSON.parseObject(body.byteStream(), mediaType == null ? StandardCharsets.UTF_8 : mediaType.charset(), JsonResponse.class);
             json.results.forEach(it -> this.files.put("/" + it.path + "/" + it.name, it));
         }
-        this.poms = this.files.values().stream().filter(it -> it.name.endsWith(".pom")).map(ArtifactoryRepositoryImpl::toGav).filter(Objects::nonNull).collect(Collectors.toSet());
-        this.plugins = this.files.values().stream().filter(it -> it.name.endsWith(".hpi") || it.name.endsWith(".jpi")).map(ArtifactoryRepositoryImpl::toGav).filter(Objects::nonNull).collect(Collectors.toSet());
+
+        Path aql = Paths.get(Main.resourcesDir.getAbsolutePath(), "aql");
+        String secondaryAqlQuery = null;
+        if (aql.toFile().isFile()) {
+            try {
+                secondaryAqlQuery = new String(Files.readAllBytes(aql), StandardCharsets.UTF_8);
+            } catch (IOException ioe) {
+                LOGGER.log(Level.WARNING, "Failed to read AQL search from file " + aql.toString() + ". Falling back to default.");
+            }
+        }
+
+        if (SECONDARY_ARTIFACTORY_URL != null
+                && SECONDARY_ARTIFACTORY_PASSWORD != null
+                && SECONDARY_ARTIFACTORY_USERNAME != null
+                && secondaryAqlQuery != null) {
+
+            LOGGER.log(Level.INFO, "Fetching data from secondary repo " + SECONDARY_ARTIFACTORY_URL);
+            LOGGER.log(Level.INFO, "AQL url " + SECONDARY_ARTIFACTORY_AQL_URL);
+            LOGGER.log(Level.INFO, "AQL query " + SECONDARY_ARTIFACTORY_AQL_URL);
+            request = new Request.Builder().url(SECONDARY_ARTIFACTORY_AQL_URL)
+                    .addHeader("Authorization", Credentials.basic(SECONDARY_ARTIFACTORY_USERNAME, SECONDARY_ARTIFACTORY_PASSWORD))
+                    .post(RequestBody.create(secondaryAqlQuery, MediaType.parse("text/plain; charset=utf-8")))
+                    .build();
+
+            try (final ResponseBody body = HttpHelper.body(client.newCall(request).execute())) {
+                final MediaType mediaType = body.contentType();
+                //System.out.println(body.string());
+                JsonResponse json = JSON.parseObject(body.byteStream(), mediaType == null ? StandardCharsets.UTF_8 : mediaType.charset(), JsonResponse.class);
+                json.results.forEach(it -> this.files.put("/" + it.path + "/" + it.name, it));
+            }
+
+        }
+        this.poms = this.files.values().parallelStream().filter(it -> it.name.endsWith(".pom")).map(ArtifactoryRepositoryImpl::toGav).filter(Objects::nonNull).collect(Collectors.toSet());
+        this.plugins = this.files.values().parallelStream().filter(it -> it.name.endsWith(".hpi") || it.name.endsWith(".jpi")).map(ArtifactoryRepositoryImpl::toGav).filter(Objects::nonNull).collect(Collectors.toSet());
         removeIf(this.plugins, it -> !this.poms.contains(new ArtifactCoordinates(it.groupId, it.artifactId, it.version, "pom")));
-        this.wars = this.files.values().stream().filter(it -> it.name.endsWith(".war")).map(ArtifactoryRepositoryImpl::toGav).collect(Collectors.toSet());
+        this.wars = this.files.values().parallelStream().filter(it -> it.name.endsWith(".war")).map(ArtifactoryRepositoryImpl::toGav).collect(Collectors.toSet());
         removeIf(this.wars, it -> !this.poms.contains(new ArtifactCoordinates(it.groupId, it.artifactId, it.version, "pom")));
         LOGGER.log(Level.INFO, "Initialized " + this.getClass().getName());
     }
@@ -274,9 +335,8 @@ public class ArtifactoryRepositoryImpl extends BaseMavenRepository {
                 throw new IllegalStateException("Failed to create non-existing directory " + parentFile);
             }
             try {
-                OkHttpClient.Builder builder = new OkHttpClient.Builder();
-                OkHttpClient client = builder.build();
-                Request request = new Request.Builder().addHeader("Authorization", Credentials.basic(username, password)).url(url).get().build();
+                OkHttpClient client = getClient();
+                Request request = new Request.Builder().url(url).get().build();
                 final Response response = client.newCall(request).execute();
                 if (response.isSuccessful()) {
                     try (final ResponseBody body = HttpHelper.body(response)) {

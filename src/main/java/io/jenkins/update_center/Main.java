@@ -254,6 +254,14 @@ public class Main {
         metadataWriter.writeMetadataFiles(repo, www);
 
         if (!skipUpdateCenter) {
+            UpdateCenterRoot updateCenterRoot = new UpdateCenterRoot(id, connectionCheckUrl, repo, new File(Main.resourcesDir, WARNINGS_JSON_FILENAME));
+            updateCenterRoot.plugins.values().parallelStream().forEach( e -> {
+                try {
+                    e.getExcerpt();
+                } catch (IOException ex) {
+                    LOGGER.log(Level.WARNING, ex, () -> "Failed to get excert for " + e.artifactId );
+                }
+            });
             final String signedUpdateCenterJson = new UpdateCenterRoot(id, connectionCheckUrl, repo, new File(Main.resourcesDir, WARNINGS_JSON_FILENAME)).encodeWithSignature(signer, prettyPrint);
             writeToFile(updateCenterPostCallJson(signedUpdateCenterJson), new File(www, UPDATE_CENTER_JSON_FILENAME));
             writeToFile(signedUpdateCenterJson, new File(www, UPDATE_CENTER_ACTUAL_JSON_FILENAME));

@@ -541,7 +541,7 @@ public class HPI extends MavenArtifact {
 
                     String checkedScm = scm;
                     // Check whether the fallback repo actually exists, if not, don't publish the repo name
-                    scm = requireGitHubRepoExistence(scm);
+                    scm = null;
                     if (scm == null) {
                         LOGGER.log(Level.FINE, "Repository does not actually exist: " + checkedScm);
                     }
