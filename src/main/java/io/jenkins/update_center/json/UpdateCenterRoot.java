@@ -14,10 +14,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
-import java.util.TreeMap;
+import java.util.*;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
@@ -40,7 +37,7 @@ public class UpdateCenterRoot extends WithSignature {
     public UpdateCenterCore core;
 
     @JSONField
-    public Map<String, PluginUpdateCenterEntry> plugins = new TreeMap<>();
+    public Map<String, PluginUpdateCenterEntry> plugins = Collections.synchronizedMap(new TreeMap<>());
 
     @JSONField
     public List<UpdateCenterWarning> warnings;
