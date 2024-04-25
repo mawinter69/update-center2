@@ -338,8 +338,8 @@ public class ArtifactoryRepositoryImpl extends BaseMavenRepository {
                 OkHttpClient client = getClient();
                 Request request = new Request.Builder().url(url).get().build();
                 final Response response = client.newCall(request).execute();
-                if (response.isSuccessful()) {
-                    try (final ResponseBody body = HttpHelper.body(response)) {
+                try (final ResponseBody body = HttpHelper.body(response)) {
+                    if (response.isSuccessful()) {
                         try (InputStream inputStream = body.byteStream(); ByteArrayOutputStream baos = new ByteArrayOutputStream(); FileOutputStream fos = new FileOutputStream(cacheFile); TeeOutputStream tos = new TeeOutputStream(fos, baos)) {
                             IOUtils.copy(inputStream, tos);
                             if (baos.size() <= CACHE_ENTRY_MAX_LENGTH) {
@@ -348,11 +348,11 @@ public class ArtifactoryRepositoryImpl extends BaseMavenRepository {
                                 this.cache.put(url, value);
                             }
                         }
-                    }
-                } else {
-                    LOGGER.log(Level.INFO, "Received HTTP error response: " + response.code() + " for URL: " + url);
-                    if (!cacheFile.mkdir()) {
-                        LOGGER.log(Level.WARNING, "Failed to create cache 'not found' directory" + cacheFile);
+                    } else {
+                        LOGGER.log(Level.INFO, "Received HTTP error response: " + response.code() + " for URL: " + url);
+                        if (!cacheFile.mkdir()) {
+                            LOGGER.log(Level.WARNING, "Failed to create cache 'not found' directory" + cacheFile);
+                        }
                     }
                 }
             } catch (RuntimeException e) {

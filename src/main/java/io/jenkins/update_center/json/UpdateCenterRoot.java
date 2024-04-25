@@ -65,14 +65,14 @@ public class UpdateCenterRoot extends WithSignature {
         // load deprecations
         deprecations = new TreeMap<>(Deprecations.getDeprecatedPlugins().collect(Collectors.toMap(Functions.identity(), UpdateCenterRoot::deprecationForPlugin)));
 
-        for (Plugin plugin : repo.listJenkinsPlugins()) {
+        repo.listJenkinsPlugins().parallelStream().forEach( plugin -> {
             try {
                 PluginUpdateCenterEntry entry = new PluginUpdateCenterEntry(plugin);
                 plugins.put(plugin.getArtifactId(), entry);
             } catch (IOException ex) {
                 LOGGER.log(Level.INFO, "Failed to add update center entry for: " + plugin, ex);
             }
-        }
+        });
 
         core = new UpdateCenterCore(repo.getJenkinsWarsByVersionNumber());
     }
